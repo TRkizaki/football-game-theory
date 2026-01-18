@@ -18,6 +18,28 @@ This library uses the Simplex method to solve the linear programming formulation
 - **PK Analysis**: Football-specific model with real-world success rate data
 - **Sensitivity Analysis**: Analyze how changes in success rates affect optimal strategies
 - **Simulation**: Monte Carlo simulation to compare different strategies
+- **Visualization**: ASCII-based charts, heatmaps, and goal diagrams for strategy display
+
+## Sample Output
+
+```
+                          KICKER STRATEGY
+    ╔══════════════════╦══════════════════╦══════════════════╗
+    ║       LEFT       ║      CENTER      ║      RIGHT       ║
+    ║   [███░░░░░░░]   ║   [███░░░░░░░]   ║   [████░░░░░░]   ║
+    ║      34.1%       ║      27.7%       ║      38.2%       ║
+    ╠══════════════════╩══════════════════╩══════════════════╣
+    ║                         ⚽ GOAL ⚽                       ║
+    ╚════════════════════════════════════════════════════════╝
+
+╔════════════════════════════════════════════════════════════╗
+║                    NASH EQUILIBRIUM                        ║
+╠════════════════════════════════════════════════════════════╣
+║  Kicker:     Left: 34.1%, Center: 27.7%, Right: 38.2%      ║
+║  Goalkeeper: Left: 44.5%, Center: 12.1%, Right: 43.5%      ║
+║  Game Value: 78.3% expected goal rate                      ║
+╚════════════════════════════════════════════════════════════╝
+```
 
 ## Project Structure
 
@@ -34,9 +56,13 @@ football-game-theory/
 │   │   ├── penalty.rs       # PK model
 │   │   ├── payoff.rs        # Payoff matrix construction
 │   │   └── stats.rs         # CSV data loading
-│   └── analysis/
-│       ├── sensitivity.rs   # Sensitivity analysis
-│       └── simulation.rs    # Monte Carlo simulation
+│   ├── analysis/
+│   │   ├── sensitivity.rs   # Sensitivity analysis
+│   │   └── simulation.rs    # Monte Carlo simulation
+│   └── visualization/
+│       ├── ascii.rs         # Goal diagram visualization
+│       ├── heatmap.rs       # Payoff matrix heatmap
+│       └── chart.rs         # Bar charts and comparisons
 ├── data/
 │   └── pk_stats.csv         # Sample PK statistics
 └── examples/
