@@ -7,7 +7,6 @@
 //! 4. Perform sensitivity analysis
 
 use football_game_theory::football::penalty::PenaltyKick;
-use football_game_theory::football::payoff::PayoffMatrix;
 use football_game_theory::analysis::simulation::Simulator;
 
 fn main() {

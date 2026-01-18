@@ -109,45 +109,185 @@ impl GameSolver {
     /// Solves for Row player's optimal mixed strategy.
     ///
     /// Row player wants to maximize the minimum expected payoff.
-    /// This is converted to an LP:
-    /// Maximize: v
-    /// Subject to: sum(p_i * a_ij) >= v for all j
-    ///            sum(p_i) = 1
-    ///            p_i >= 0
+    /// We solve the dual problem (Column player's LP) and extract Row's strategy
+    /// from the dual variables.
     ///
-    /// Reformulated with y_i = p_i / v:
-    /// Minimize: sum(y_i)
-    /// Subject to: sum(y_i * a_ij) >= 1 for all j
-    ///            y_i >= 0
+    /// Column player's primal:
+    /// Maximize: sum(z_j)
+    /// Subject to: sum(z_j * a_ij) <= 1 for all i
+    ///            z_j >= 0
+    ///
+    /// The dual of this gives us Row player's strategy.
     fn solve_row_player(&self, matrix: &[Vec<f64>]) -> Result<Vec<f64>, GameError> {
-        // For Row player: minimize sum(y_i) where y_i = p_i / v
-        // Subject to: A^T * y >= 1 (transposed constraints)
+        // We solve via the Column player's problem and use duality.
+        // For Row player with shifted positive matrix:
+        // The value v = 1 / sum(z_j) where z is Column's optimal solution.
+        // Row's strategy comes from the shadow prices of the Column LP constraints.
 
-        // Convert to standard maximization form for Simplex
-        // Maximize: -sum(y_i) (equivalent to minimize sum)
-        // Subject to: -A^T * y <= -1
+        // Alternative approach: solve Row's problem directly by using
+        // the fact that with positive payoffs, we can set up:
+        // Maximize: sum(y_i)  [this is 1/v, and we want to maximize the game value]
+        // Subject to: sum(y_i * a_ij) >= 1 for all j
+        //
+        // But Simplex needs <= constraints, so we solve the Column problem
+        // and derive Row strategy from complementary slackness.
 
-        let c: Vec<f64> = vec![-1.0; self.num_rows];
+        // Simpler approach: solve Column's LP, then solve for Row's best response
+        // that makes Column indifferent.
 
-        // Transpose and negate for <= form
-        let a: Vec<Vec<f64>> = (0..self.num_cols)
-            .map(|j| {
-                (0..self.num_rows)
-                    .map(|i| -matrix[i][j])
-                    .collect()
-            })
+        // Actually, let's use the relationship between primal and dual:
+        // Solve Column's problem to get game value, then solve Row's directly.
+
+        // For a proper solution, we need to solve:
+        // Row: minimize sum(y_i) subject to A^T * y >= 1, y >= 0
+        // This is equivalent to: maximize sum(y_i) subject to -A^T * y <= -1
+        // But our Simplex requires b >= 0.
+
+        // Solution: Use the Column player's dual.
+        // Column's primal: max sum(z) s.t. Az <= 1
+        // Column's dual: min sum(w) s.t. A^T w >= 1, w >= 0
+        // This dual IS Row's problem!
+
+        // So we get Row's strategy by solving Column's problem and reading dual vars.
+        // Since we don't have dual variable extraction, let's solve directly:
+
+        // Transform Row's problem:
+        // min sum(y) s.t. A^T y >= 1
+        // Let's use: find y such that for each column j: sum_i(y_i * a_ij) >= 1
+
+        // We can solve this by finding the maximum over columns for each row weight.
+        // Use iterative approach or solve the equivalent Column problem.
+
+        // Practical solution: solve Column's LP, compute game value,
+        // then find Row's strategy that achieves this value.
+
+        let col_solution = self.solve_col_player_internal(matrix)?;
+        let sum_z: f64 = col_solution.iter().sum();
+        let game_value_shifted = 1.0 / sum_z;
+
+        // Now find Row's strategy by solving:
+        // For Row: we want p such that min_j sum_i(p_i * a_ij) = game_value_shifted
+        // This means: sum_i(p_i * a_ij) >= v for all j, sum(p_i) = 1
+
+        // Reformulate: let y_i = p_i / v, then sum(y_i * a_ij) >= 1 for all j
+        // and sum(y_i) = 1/v
+
+        // We need to find which constraints are tight (active) at optimum.
+        // At Nash equilibrium, Column mixes over strategies where Row is indifferent.
+
+        // Find columns where Column plays with positive probability
+        let active_cols: Vec<usize> = col_solution
+            .iter()
+            .enumerate()
+            .filter(|&(_, &z)| z > 1e-9)
+            .map(|(j, _)| j)
             .collect();
 
-        let b: Vec<f64> = vec![-1.0; self.num_cols];
+        // Row's strategy must make Column indifferent among active columns.
+        // For active columns j: sum_i(p_i * a_ij) = v (all equal)
+        // For inactive columns: sum_i(p_i * a_ij) >= v
 
-        let mut solver = Simplex::new(&c, &a, &b)?;
-        let (_, y) = solver.solve()?;
+        // Solve the system of linear equations for active columns.
+        let num_active = active_cols.len();
 
-        // Convert back: v = 1 / sum(y_i), p_i = y_i * v
-        let sum_y: f64 = y.iter().sum();
-        let strategy: Vec<f64> = y.iter().map(|&yi| yi / sum_y).collect();
+        if num_active == 0 {
+            return Err(GameError::SolverError(SimplexError::Infeasible));
+        }
+
+        if num_active == 1 {
+            // Only one active column, Row plays pure best response
+            let j = active_cols[0];
+            let best_row = (0..self.num_rows)
+                .max_by(|&i1, &i2| matrix[i1][j].partial_cmp(&matrix[i2][j]).unwrap())
+                .unwrap();
+            let mut strategy = vec![0.0; self.num_rows];
+            strategy[best_row] = 1.0;
+            return Ok(strategy);
+        }
+
+        // For multiple active columns, solve using the constraint that
+        // expected payoffs are equal for all active columns.
+        // We use: sum_i(p_i * a_ij) = v for active j, and sum(p_i) = 1
+
+        // This is a system of linear equations. Use Gaussian elimination.
+        let strategy = self.solve_indifference_system(matrix, &active_cols, game_value_shifted)?;
 
         Ok(strategy)
+    }
+
+    /// Solves the system to find Row's strategy that makes Column indifferent.
+    fn solve_indifference_system(
+        &self,
+        matrix: &[Vec<f64>],
+        active_cols: &[usize],
+        _game_value: f64,
+    ) -> Result<Vec<f64>, GameError> {
+        // We need: sum_i(p_i * a_ij) = same for all active j
+        //          sum(p_i) = 1
+        //          p_i >= 0
+
+        // Set up augmented matrix for: [A_active^T | 1] * [p | -v]^T = 0, sum(p) = 1
+        // Simpler: use the fact that at equilibrium, expected payoffs are equal.
+
+        // For 2-player zero-sum, we can compute directly.
+        // Equal payoff condition: a_i1 * p + a_i2 * (1-p) for 2x2 case.
+
+        // General case: solve using least squares or direct system.
+
+        let n = self.num_rows;
+        let m = active_cols.len();
+
+        // Build system: we want p such that A_active^T * p has all equal entries
+        // This means: a_ij1 * p_i = a_ij2 * p_i for all pairs j1, j2
+        // => sum_i (a_ij1 - a_ij2) * p_i = 0
+
+        // Plus constraint: sum(p_i) = 1
+
+        // Build augmented matrix
+        let mut aug: Vec<Vec<f64>> = Vec::new();
+
+        // Difference equations (m-1 equations)
+        for k in 1..m {
+            let j0 = active_cols[0];
+            let jk = active_cols[k];
+            let row: Vec<f64> = (0..n)
+                .map(|i| matrix[i][j0] - matrix[i][jk])
+                .collect();
+            aug.push(row);
+        }
+
+        // Sum to 1 constraint
+        aug.push(vec![1.0; n]);
+
+        // RHS
+        let mut rhs: Vec<f64> = vec![0.0; m - 1];
+        rhs.push(1.0);
+
+        // Solve using Gaussian elimination
+        let solution = gaussian_elimination(&mut aug, &mut rhs, n)?;
+
+        // Ensure non-negative (clamp small negatives from numerical error)
+        let strategy: Vec<f64> = solution.iter().map(|&x| x.max(0.0)).collect();
+
+        // Renormalize
+        let sum: f64 = strategy.iter().sum();
+        if sum < 1e-10 {
+            return Err(GameError::SolverError(SimplexError::Infeasible));
+        }
+
+        Ok(strategy.iter().map(|&x| x / sum).collect())
+    }
+
+    /// Internal Column player solver that returns raw z values.
+    fn solve_col_player_internal(&self, matrix: &[Vec<f64>]) -> Result<Vec<f64>, GameError> {
+        let c: Vec<f64> = vec![1.0; self.num_cols];
+        let a: Vec<Vec<f64>> = matrix.to_vec();
+        let b: Vec<f64> = vec![1.0; self.num_rows];
+
+        let mut solver = Simplex::new(&c, &a, &b)?;
+        let (_, z) = solver.solve()?;
+
+        Ok(z)
     }
 
     /// Solves for Column player's optimal mixed strategy.
@@ -209,6 +349,71 @@ impl GameSolver {
         }
         payoff
     }
+}
+
+/// Solves a system of linear equations using Gaussian elimination with partial pivoting.
+fn gaussian_elimination(
+    a: &mut [Vec<f64>],
+    b: &mut [f64],
+    n: usize,
+) -> Result<Vec<f64>, GameError> {
+    let m = a.len(); // number of equations
+
+    if m == 0 || n == 0 {
+        return Err(GameError::SolverError(SimplexError::InvalidDimensions));
+    }
+
+    // Forward elimination with partial pivoting
+    for col in 0..m.min(n) {
+        // Find pivot
+        let mut max_row = col;
+        let mut max_val = if col < a.len() { a[col][col].abs() } else { 0.0 };
+
+        for row in (col + 1)..m {
+            if col < a[row].len() && a[row][col].abs() > max_val {
+                max_val = a[row][col].abs();
+                max_row = row;
+            }
+        }
+
+        if max_val < 1e-12 {
+            continue; // Skip this column (singular or underdetermined)
+        }
+
+        // Swap rows
+        a.swap(col, max_row);
+        b.swap(col, max_row);
+
+        // Eliminate below
+        for row in (col + 1)..m {
+            if col < a[row].len() && a[col][col].abs() > 1e-12 {
+                let factor = a[row][col] / a[col][col];
+                for j in col..n {
+                    if j < a[row].len() && j < a[col].len() {
+                        a[row][j] -= factor * a[col][j];
+                    }
+                }
+                b[row] -= factor * b[col];
+            }
+        }
+    }
+
+    // Back substitution
+    let mut x = vec![0.0; n];
+
+    for i in (0..m.min(n)).rev() {
+        if i < a.len() && i < a[i].len() && a[i][i].abs() > 1e-12 {
+            let mut sum = b[i];
+            for j in (i + 1)..n {
+                if j < a[i].len() {
+                    sum -= a[i][j] * x[j];
+                }
+            }
+            x[i] = sum / a[i][i];
+        }
+    }
+
+    Ok(x)
 }
 
 #[cfg(test)]
