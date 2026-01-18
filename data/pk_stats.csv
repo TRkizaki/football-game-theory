@@ -1,0 +1,10 @@
+kick_direction,gk_direction,goals,attempts
+left,left,58,100
+left,center,93,100
+left,right,95,100
+center,left,83,100
+center,center,44,100
+center,right,83,100
+right,left,93,100
+right,center,90,100
+right,right,60,100
